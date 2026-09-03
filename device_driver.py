@@ -162,8 +162,9 @@ class DeviceDriver:
         response = self.send_command(f"register {login} {password}")
         return any("Profile Created" in line for line in response)
 
-    # Авторизується та повертає True лише після створення сесії.
+    # Спочатку реєструє профіль, а потім авторизується згідно з контрактом завдання.
     def login(self, login, password):
+        self.register(login, password)
         response = self.send_command(f"login {login} {password}")
         return any("Session Started" in line for line in response)
 

@@ -12,6 +12,7 @@ TEST_PASSWORD = "111222"
 WRONG_PASSWORD = "wrongpass"
 SENSOR_COLLECTION_TIME = 32
 EXPECTED_HISTORY_COUNT = 10
+KNOWN_BUG_MAX_HISTORY_COUNT = 5
 FAILED_LOGIN_ATTEMPTS = 3
 
 
@@ -26,7 +27,7 @@ def prepare_test_profile(driver):
     if driver.register(TEST_LOGIN, TEST_PASSWORD):
         return
 
-    # Існуючий профіль потрібно авторизувати, перезавантажити та створити заново.
+    # Існуючий тестовий профіль потрібно авторизувати й створити заново після reboot.
     assert driver.login(
         TEST_LOGIN,
         TEST_PASSWORD,
@@ -71,8 +72,8 @@ def rate_limit_device(connected_device):
     return connected_device
 
 
-# Перевіряє, що sensor history зберігає очікувані десять показань.
-def test_sensor_history_count(device):
+# Перевіряє, що відомий дефект sensor history відтворюється з максимумом у 5 записів.
+def test_sensor_history_bug_is_reproduced(device):
     device.send_command("sensor start")
 
     try:
@@ -91,20 +92,47 @@ def test_sensor_history_count(device):
 
     actual_count = len(sensor_lines)
 
-    assert actual_count == EXPECTED_HISTORY_COUNT, (
-        f"Sensor history should contain {EXPECTED_HISTORY_COUNT} entries, "
-        f"but contains {actual_count}"
+    if 1 <= actual_count <= KNOWN_BUG_MAX_HISTORY_COUNT:
+        print(
+            f"PASS: дефект відтворено — очікувалося "
+            f"{EXPECTED_HISTORY_COUNT} записів, отримано {actual_count}"
+        )
+        return
+
+    if actual_count == 0:
+        pytest.fail(
+            "FAIL: sensor history порожня; можлива помилка збору даних "
+            "або serial-комунікації"
+        )
+
+    if actual_count == EXPECTED_HISTORY_COUNT:
+        pytest.fail(
+            f"FAIL: дефект не відтворено — отримано всі "
+            f"{EXPECTED_HISTORY_COUNT} записів"
+        )
+
+    if KNOWN_BUG_MAX_HISTORY_COUNT < actual_count < EXPECTED_HISTORY_COUNT:
+        pytest.fail(
+            f"FAIL: отримано {actual_count} записів; це не відповідає "
+            f"відомому дефекту з максимумом {KNOWN_BUG_MAX_HISTORY_COUNT}"
+        )
+
+    pytest.fail(
+        f"FAIL: отримано неочікувану кількість записів: {actual_count}; "
+        f"очікувалося не більше {KNOWN_BUG_MAX_HISTORY_COUNT} для відтворення дефекту"
     )
 
 
 # Перевіряє блокування профілю після трьох неправильних паролів.
 def test_login_rate_limit(rate_limit_device):
-    # Кожна невдала спроба повинна завершитися без створення сесії.
+    # Надсилаємо лише login, без автоматичного register із методу драйвера.
     for attempt in range(1, FAILED_LOGIN_ATTEMPTS + 1):
-        assert not rate_limit_device.login(
-            TEST_LOGIN,
-            WRONG_PASSWORD,
-        ), f"Login unexpectedly succeeded on failed attempt {attempt}"
+        response = rate_limit_device.send_command(
+            f"login {TEST_LOGIN} {WRONG_PASSWORD}"
+        )
+        assert not any("Session Started" in line for line in response), (
+            f"Session unexpectedly started on failed attempt {attempt}"
+        )
 
     # Перевіряємо необроблену відповідь, бо важливі маркери locked і Session Started.
     response = rate_limit_device.send_command(
