@@ -33,6 +33,7 @@ def create_serial_connection(
         timeout=timeout,
     )
 
+
 # Інкапсулює надсилання команд і читання відповідей пристрою через serial-порт.
 class DeviceDriver:
     # Зберігає параметри з'єднання; фізично порт відкривається методом open().
