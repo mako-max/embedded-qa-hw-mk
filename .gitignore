@@ -25,3 +25,5 @@ Desktop.ini
 *.temp
 tmp/
 temp/
+reports/*
+!reports/.gitkeep

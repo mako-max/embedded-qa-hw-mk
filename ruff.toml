@@ -1,0 +1,3 @@
+[lint.per-file-ignores]
+"conftest.py" = ["EXE002"]
+"tests/constants.py" = ["EXE002"]

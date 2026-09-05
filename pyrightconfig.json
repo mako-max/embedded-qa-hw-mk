@@ -3,5 +3,10 @@
   "venv": ".venv",
   "pythonVersion": "3.12",
   "typeCheckingMode": "basic",
-  "include": ["device_driver.py", "test_bugs.py"]
+  "extraPaths": ["."],
+  "include": [
+    "drivers",
+    "tests",
+    "conftest.py"
+  ]
 }
