@@ -2,6 +2,8 @@ from typing import Protocol
 
 
 # Визначає мінімальний контракт для будь-якого способу зв'язку з пристроєм.
+# DeviceDriver залежить тільки від цих чотирьох операцій, тому майбутній TCP/Wi-Fi
+# transport можна додати без дублювання командної логіки та змін у тестах.
 class Transport(Protocol):
     def open(self) -> None: ...
 

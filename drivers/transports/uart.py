@@ -6,6 +6,8 @@ from .base import Transport
 # Стандартні параметри UART-протоколу пристрою: 115200 baud, 8N1.
 DEFAULT_BAUDRATE = 115200
 DEFAULT_TIMEOUT = 2
+# VID належить USB-UART bridge стенда і не змінюється між Linux/Windows;
+# системне ім'я порту може щоразу бути іншим, тому його не hardcode-имо.
 DEFAULT_DEVICE_VID = 0x1A86
 SERIAL_BYTESIZE = serial.EIGHTBITS
 SERIAL_PARITY = serial.PARITY_NONE
