@@ -1,3 +1,5 @@
 [lint.per-file-ignores]
 "conftest.py" = ["EXE002"]
+"drivers/transports/*.py" = ["EXE002"]
 "tests/constants.py" = ["EXE002"]
+"tests/smoke/*.py" = ["EXE002"]
