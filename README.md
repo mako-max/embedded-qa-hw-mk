@@ -31,6 +31,16 @@ python -m pytest -v tests/smoke/test_smoke.py
 
 python -m pytest -v tests/functional/test_alarm.py
 
+## Run config persistence test
+
+python -m pytest -v tests/functional/test_config.py
+
+## Run distance stability test
+
+Place a stationary flat target in front of the ultrasonic sensor, then run:
+
+python -m pytest -v tests/functional/test_distance_stability.py
+
 ## Run known-bug regression tests
 
 python -m pytest -v tests/functional/test_bugs.py
