@@ -14,8 +14,11 @@ from tests.constants import (
     WRONG_PASSWORD,
 )
 
+pytestmark = pytest.mark.functional
+
 
 # Перевіряє, що відомий дефект sensor history відтворюється з максимумом у 5 записів.
+@pytest.mark.slow
 def test_sensor_history_bug_is_reproduced(device):
     device.send_command("sensor start")
 

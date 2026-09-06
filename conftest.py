@@ -1,10 +1,7 @@
 import pytest
 
-from drivers.device_driver import (
-    DeviceDriver,
-    find_device_port,
-    get_available_ports,
-)
+from drivers.device_driver import DeviceDriver
+from drivers.transports.uart import UARTTransport, find_device_port, get_available_ports
 from tests.constants import TEST_LOGIN, TEST_PASSWORD
 
 
@@ -34,7 +31,8 @@ def prepare_test_profile(driver):
 def connected_device():
     ports = get_available_ports()
     port = find_device_port(ports)
-    driver = DeviceDriver(port)
+    transport = UARTTransport(port)
+    driver = DeviceDriver(transport)
 
     try:
         driver.open()

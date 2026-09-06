@@ -5,158 +5,139 @@ import re
 import sys
 import time
 
-import serial
-from serial.tools import list_ports
-
-# Стандартні параметри протоколу пристрою: 115200 baud, 8N1.
-DEFAULT_BAUDRATE = 115200
-DEFAULT_TIMEOUT = 2
-DEFAULT_REBOOT_TIMEOUT = 5
-SERIAL_BYTESIZE = serial.EIGHTBITS
-SERIAL_PARITY = serial.PARITY_NONE
-SERIAL_STOPBITS = serial.STOPBITS_ONE
-
-
-# Створює serial-з'єднання з єдиною конфігурацією для драйвера та CLI.
-def create_serial_connection(
-    port,
-    *,
-    baudrate=DEFAULT_BAUDRATE,
-    timeout=DEFAULT_TIMEOUT,
-):
-    return serial.Serial(
-        port=port,
-        baudrate=baudrate,
-        bytesize=SERIAL_BYTESIZE,
-        parity=SERIAL_PARITY,
-        stopbits=SERIAL_STOPBITS,
-        timeout=timeout,
+if __package__:
+    from .transports.base import Transport
+    from .transports.uart import (
+        DEFAULT_BAUDRATE,
+        SERIAL_BYTESIZE,
+        SERIAL_PARITY,
+        SERIAL_STOPBITS,
+        UARTTransport,
+        find_device_port,
+        get_available_ports,
+        print_available_ports,
+    )
+else:
+    from transports.base import Transport
+    from transports.uart import (
+        DEFAULT_BAUDRATE,
+        SERIAL_BYTESIZE,
+        SERIAL_PARITY,
+        SERIAL_STOPBITS,
+        UARTTransport,
+        find_device_port,
+        get_available_ports,
+        print_available_ports,
     )
 
+DEFAULT_COMMAND_TIMEOUT = 2
+DEFAULT_REBOOT_TIMEOUT = 5
+CURRENT_FIRMWARE_READY_PATTERN = "Device ready"
 
-# Інкапсулює надсилання команд і читання відповідей пристрою через serial-порт.
+
+# Виконує команди пристрою незалежно від способу доставки даних.
 class DeviceDriver:
-    # Зберігає параметри з'єднання; фізично порт відкривається методом open().
-    def __init__(
-        self,
-        port,
-        timeout=DEFAULT_TIMEOUT,
-        *,
-        baudrate=DEFAULT_BAUDRATE,
-    ):
-        self.port = port
-        self.baudrate = baudrate
+    # Отримує готовий transport замість параметрів конкретного з'єднання.
+    def __init__(self, transport: Transport, timeout=DEFAULT_COMMAND_TIMEOUT):
+        self.transport = transport
         self.timeout = timeout
-        self.serial_connection = None
 
-    # Відкриває порт один раз і очищає дані, що залишилися від попередньої сесії.
+    # Делегує відкриття з'єднання вибраному transport.
     def open(self):
-        if self.serial_connection is not None and self.serial_connection.is_open:
-            return
+        self.transport.open()
 
-        self.serial_connection = create_serial_connection(
-            self.port,
-            baudrate=self.baudrate,
-            timeout=self.timeout,
-        )
-        self.serial_connection.reset_input_buffer()
-
-    # Закриває порт і скидає посилання, щоб драйвер можна було відкрити повторно.
+    # Делегує коректне закриття з'єднання вибраному transport.
     def close(self):
-        if self.serial_connection is not None:
-            self.serial_connection.close()
-            self.serial_connection = None
+        self.transport.close()
 
     # Надсилає текстову команду та повертає рядки, отримані протягом timeout.
     def send_command(self, command):
-        if self.serial_connection is None or not self.serial_connection.is_open:
-            raise RuntimeError("Serial port is not open")
-
-        # Пристрій очікує завершення кожної команди символами CRLF.
-        command = command.rstrip("\r\n") + "\r\n"
-        self.serial_connection.write(command.encode("utf-8"))
-        self.serial_connection.flush()
+        self.transport.send_line(command)
         time.sleep(0.1)
 
         return self.read_lines(self.timeout)
 
     # Збирає непорожні текстові рядки до завершення заданого часу очікування.
     def read_lines(self, timeout):
-        if self.serial_connection is None or not self.serial_connection.is_open:
-            raise RuntimeError("Serial port is not open")
-
         lines = []
         end_time = time.time() + timeout
-        original_timeout = self.serial_connection.timeout
 
-        try:
-            while time.time() < end_time:
-                remaining_time = end_time - time.time()
-                # Короткий timeout дозволяє регулярно перевіряти загальний дедлайн.
-                self.serial_connection.timeout = min(0.1, max(remaining_time, 0))
-                raw_line = self.serial_connection.readline()
+        while time.time() < end_time:
+            remaining_time = end_time - time.time()
+            # Transport сам застосовує timeout до конкретної операції читання.
+            raw_line = self.transport.read_line(min(0.1, max(remaining_time, 0)))
 
-                if not raw_line:
-                    continue
+            if not raw_line:
+                continue
 
-                line = raw_line.decode("utf-8", errors="replace")
-                # Видаляємо ANSI-коди кольору, щоб тести працювали з чистим текстом.
-                line = re.sub(r"\x1b\[[0-9;]*[mK]", "", line)
-                line = line.strip("\r\n")
+            line = raw_line.decode("utf-8", errors="replace")
+            # Видаляємо ANSI-коди кольору, щоб тести працювали з чистим текстом.
+            line = re.sub(r"\x1b\[[0-9;]*[mK]", "", line)
+            line = line.strip("\r\n")
 
-                if line.strip():
-                    lines.append(line)
-        finally:
-            # Відновлюємо timeout навіть після помилки читання serial-порту.
-            self.serial_connection.timeout = original_timeout
+            if line.strip():
+                lines.append(line)
 
         return lines
 
-    # Читає нові рядки, доки не знайде pattern або не завершиться timeout.
-    def wait_for(self, pattern, timeout):
-        if self.serial_connection is None or not self.serial_connection.is_open:
-            raise RuntimeError("Serial port is not open")
-
+    # Читає нові рядки до появи очікуваного або сумісного pattern.
+    def wait_for_pattern(self, pattern, timeout=DEFAULT_REBOOT_TIMEOUT, alternatives=()):
+        expected_patterns = (pattern, *alternatives)
         end_time = time.time() + timeout
-        original_timeout = self.serial_connection.timeout
 
-        try:
-            while time.time() < end_time:
-                remaining_time = end_time - time.time()
-                # Читаємо короткими інтервалами, але не довше загального timeout.
-                self.serial_connection.timeout = min(0.1, max(remaining_time, 0))
-                raw_line = self.serial_connection.readline()
+        while time.time() < end_time:
+            remaining_time = end_time - time.time()
+            raw_line = self.transport.read_line(min(0.1, max(remaining_time, 0)))
 
-                if not raw_line:
-                    continue
+            if not raw_line:
+                continue
 
-                line = raw_line.decode("utf-8", errors="replace")
-                # Керівні ANSI-послідовності не повинні впливати на пошук pattern.
-                line = re.sub(r"\x1b\[[0-9;]*[mK]", "", line)
-                line = line.strip("\r\n")
+            line = raw_line.decode("utf-8", errors="replace")
+            # Керівні ANSI-послідовності не повинні впливати на пошук pattern.
+            line = re.sub(r"\x1b\[[0-9;]*[mK]", "", line)
+            line = line.strip("\r\n")
 
-                if pattern in line:
-                    return True
+            if any(expected in line for expected in expected_patterns):
+                return True
 
-            return False
-        finally:
-            # Повертаємо timeout з'єднання до значення, заданого користувачем.
-            self.serial_connection.timeout = original_timeout
+        return False
 
-    # Перезавантажує авторизований пристрій і очікує повідомлення про готовність.
+    # Зберігає сумісність із попереднім публічним API драйвера.
+    def wait_for(self, pattern, timeout):
+        return self.wait_for_pattern(pattern, timeout)
+
+    # Перезавантажує авторизований пристрій без sleep і очікує старт застосунку.
     def reboot(self, timeout=DEFAULT_REBOOT_TIMEOUT):
-        response = self.send_command("reboot")
+        self.transport.send_line("reboot")
+        return self.wait_for_pattern(
+            "App started",
+            timeout,
+            alternatives=(CURRENT_FIRMWARE_READY_PATTERN,),
+        )
 
-        # Без активної сесії reboot заборонено, тому підготовка може перейти до register.
-        if any("Access denied" in line for line in response):
-            return False
+    # Перевіряє доступність CLI та ключових базових команд через help.
+    def is_cli_responsive(self):
+        response = self.send_command("help")
+        output = "\n".join(response)
+        required_markers = ("=== Commands ====", "status", "reboot")
 
-        # Швидке завантаження може завершитися ще під час send_command().
-        if any("Device ready" in line for line in response):
-            return True
+        return "Access denied" not in output and all(
+            marker in output for marker in required_markers
+        )
 
-        # Якщо завантаження ще триває, дочитуємо serial до повідомлення Device ready.
-        return self.wait_for("Device ready", timeout)
+    # Перевіряє завершеність status та наявність доступної heap-пам'яті.
+    def is_system_status_healthy(self):
+        response = self.send_command("status")
+        output = "\n".join(response)
+        heap_match = re.search(r"\[Status\] Free heap:\s+(\d+) bytes", output)
+
+        return (
+            "Access denied" not in output
+            and "[Status] Checking components" in output
+            and "[Status] Done." in output
+            and heap_match is not None
+            and int(heap_match.group(1)) > 0
+        )
 
     # Створює профіль і визначає успіх за маркером у відповіді прошивки.
     def register(self, login, password):
@@ -170,42 +151,17 @@ class DeviceDriver:
         return any("Session Started" in line for line in response)
 
 
-# Повертає доступні порти у стабільному порядку для відтворюваного вибору.
-def get_available_ports():
-    return sorted(list_ports.comports(), key=lambda port: port.device)
-
-
-# Друкує діагностичну інформацію про знайдені serial-порти.
-def print_available_ports(ports):
-    print(f"Available serial ports: {len(ports)}")
-
-    for port in ports:
-        print(port.device)
-        print(f"  description: {port.description or 'n/a'}")
-        print(f"  hwid: {port.hwid or 'n/a'}")
-
-
-# Обирає перший USB serial-порт, для якого система визначила VID і PID.
-def find_device_port(ports):
-    for port in ports:
-        if port.vid is not None and port.pid is not None:
-            return port.device
-
-    raise RuntimeError("USB serial port was not found")
-
-
-# Збирає необроблені байти для діагностики без декодування тексту.
-def read_raw_response(connection, timeout):
+# Збирає необроблені байти transport для діагностики без декодування тексту.
+def read_raw_response(transport: Transport, timeout):
     response = bytearray()
     end_time = time.time() + timeout
 
     while time.time() < end_time:
-        bytes_available = connection.in_waiting
+        remaining_time = end_time - time.time()
+        raw_line = transport.read_line(min(0.1, max(remaining_time, 0)))
 
-        if bytes_available > 0:
-            response.extend(connection.read(bytes_available))
-        else:
-            time.sleep(0.01)
+        if raw_line:
+            response.extend(raw_line)
 
     return bytes(response)
 
@@ -223,8 +179,8 @@ def build_parser():
     parser.add_argument(
         "--timeout",
         type=float,
-        default=DEFAULT_TIMEOUT,
-        help=f"response timeout in seconds (default: {DEFAULT_TIMEOUT})",
+        default=DEFAULT_COMMAND_TIMEOUT,
+        help=f"response timeout in seconds (default: {DEFAULT_COMMAND_TIMEOUT})",
     )
     return parser
 
@@ -246,22 +202,23 @@ def run(args):
     )
     print(f"Timeout: {args.timeout:g} seconds")
 
-    # Контекстний менеджер гарантовано закриє порт при успіху або помилці.
-    with create_serial_connection(
+    transport = UARTTransport(
         port,
         baudrate=args.baudrate,
         timeout=args.timeout,
-    ) as connection:
-        connection.reset_input_buffer()
-        command = b"help\r\n"
-        print(f"Sent bytes: {command!r}")
+    )
 
-        connection.write(command)
-        connection.flush()
+    try:
+        transport.open()
+        command = "help"
+        print(f"Sent bytes: {(command + chr(13) + chr(10)).encode()!r}")
 
-        raw_response = read_raw_response(connection, args.timeout)
+        transport.send_line(command)
+        raw_response = read_raw_response(transport, args.timeout)
         print(f"Raw response ({len(raw_response)} bytes):")
         print(repr(raw_response))
+    finally:
+        transport.close()
 
     return 0
 
@@ -273,7 +230,7 @@ def main():
 
     try:
         return run(args)
-    except (serial.SerialException, RuntimeError) as error:
+    except (OSError, RuntimeError) as error:
         print(f"Error: {error}", file=sys.stderr)
         return 1
 
