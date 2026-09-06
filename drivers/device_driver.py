@@ -40,6 +40,7 @@ DEFAULT_COMMAND_TIMEOUT = 2
 DEFAULT_REBOOT_TIMEOUT = 5
 DEFAULT_POLL_INTERVAL = 0.25
 DEFAULT_JOB_TIMEOUT = 2
+DEFAULT_DISTANCE_SERIES_TIMEOUT = 12
 
 # Завдання вимагає `App started`, але поточна версія FW повідомляє `Device ready`.
 # Альтернативний marker дозволяє тестувати обидві версії без hardcoded затримки.
@@ -235,6 +236,28 @@ class DeviceDriver:
         )
         return matched
 
+    # Збирає штатну серію з 10 distance-вимірів та повертає calibrated cm.
+    # Команда сама витримує інтервал 1 с; тест не керує часом через sleep.
+    def collect_distance_readings(self, timeout=DEFAULT_DISTANCE_SERIES_TIMEOUT):
+        response, completed = self.send_command_until(
+            "distance 10s",
+            "[Distance] Done.",
+            timeout=timeout,
+        )
+        output = "\n".join(response)
+
+        if not completed:
+            raise RuntimeError(f"Distance series did not complete:\n{output}")
+
+        calibrated_values = re.findall(
+            r"\[Distance\]\s+#\d+\s+"
+            r"-?\d+(?:\.\d+)?\s+cm\s+"
+            r"\(calibrated:\s*(-?\d+(?:\.\d+)?)\s+cm\)",
+            output,
+        )
+
+        return [float(value) for value in calibrated_values]
+
     # Запускає фонове отримання показань сенсора.
     def start_sensor(self):
         _, matched = self.send_command_until(
@@ -248,6 +271,46 @@ class DeviceDriver:
         _, matched = self.send_command_until(
             f"config set sensor_interval {interval}",
             f"[Config] sensor_interval = {interval}",
+        )
+        return matched
+
+    # Читає числове значення config key, не передаючи розбір UART-виводу в тест.
+    # Одиниці `ms`/`cm` необов'язкові: різні параметри та версії FW форматують їх
+    # по-різному, але числовий контракт команди залишається однаковим.
+    def get_config_value(self, key):
+        response, matched = self.send_command_until(
+            f"config get {key}",
+            f"[Config] {key} =",
+        )
+        output = "\n".join(response)
+        value_match = re.search(
+            rf"\[Config\]\s+{re.escape(key)}\s*=\s*(-?\d+)\b",
+            output,
+        )
+
+        if not matched or value_match is None:
+            raise RuntimeError(f"Cannot parse config value for {key!r}:\n{output}")
+
+        return int(value_match.group(1))
+
+    # Повертає snapshot вибраних параметрів після окремого config get для кожного.
+    def get_config_values(self, keys):
+        return {key: self.get_config_value(key) for key in keys}
+
+    # Копіює робочу конфігурацію в NVS і чекає marker завершеного commit.
+    def save_config(self):
+        _, matched = self.send_command_until(
+            "config save",
+            "[Config] Saved successfully.",
+        )
+        return matched
+
+    # Завантажує NVS-копію у робочу конфігурацію; warning про defaults не вважаємо
+    # protocol failure, якщо FW завершила операцію marker-ом успішного застосування.
+    def load_config(self):
+        _, matched = self.send_command_until(
+            "config load",
+            "[Config] Config applied successfully.",
         )
         return matched
 
