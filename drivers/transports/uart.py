@@ -1,11 +1,12 @@
 import serial
 from serial.tools import list_ports
 
-from drivers.transports.base import Transport
+from .base import Transport
 
 # Стандартні параметри UART-протоколу пристрою: 115200 baud, 8N1.
 DEFAULT_BAUDRATE = 115200
 DEFAULT_TIMEOUT = 2
+DEFAULT_DEVICE_VID = 0x1A86
 SERIAL_BYTESIZE = serial.EIGHTBITS
 SERIAL_PARITY = serial.PARITY_NONE
 SERIAL_STOPBITS = serial.STOPBITS_ONE
@@ -103,10 +104,10 @@ def print_available_ports(ports):
         print(f"  hwid: {port.hwid or 'n/a'}")
 
 
-# Обирає перший USB UART-порт, для якого система визначила VID і PID.
-def find_device_port(ports):
+# Обирає USB UART-порт навчального пристрою за VID, без hardcoded COM-порту.
+def find_device_port(ports, device_vid=DEFAULT_DEVICE_VID):
     for port in ports:
-        if port.vid is not None and port.pid is not None:
+        if port.vid == device_vid:
             return port.device
 
-    raise RuntimeError("USB serial port was not found")
+    raise RuntimeError(f"USB serial port with VID 0x{device_vid:04X} was not found")

@@ -5,20 +5,34 @@ import re
 import sys
 import time
 
-from drivers.transports.base import Transport
-from drivers.transports.uart import (
-    DEFAULT_BAUDRATE,
-    SERIAL_BYTESIZE,
-    SERIAL_PARITY,
-    SERIAL_STOPBITS,
-    UARTTransport,
-    find_device_port,
-    get_available_ports,
-    print_available_ports,
-)
+if __package__:
+    from .transports.base import Transport
+    from .transports.uart import (
+        DEFAULT_BAUDRATE,
+        SERIAL_BYTESIZE,
+        SERIAL_PARITY,
+        SERIAL_STOPBITS,
+        UARTTransport,
+        find_device_port,
+        get_available_ports,
+        print_available_ports,
+    )
+else:
+    from transports.base import Transport
+    from transports.uart import (
+        DEFAULT_BAUDRATE,
+        SERIAL_BYTESIZE,
+        SERIAL_PARITY,
+        SERIAL_STOPBITS,
+        UARTTransport,
+        find_device_port,
+        get_available_ports,
+        print_available_ports,
+    )
 
 DEFAULT_COMMAND_TIMEOUT = 2
 DEFAULT_REBOOT_TIMEOUT = 5
+CURRENT_FIRMWARE_READY_PATTERN = "Device ready"
 
 
 # Виконує команди пристрою незалежно від способу доставки даних.
@@ -66,8 +80,9 @@ class DeviceDriver:
 
         return lines
 
-    # Читає нові рядки, доки не знайде pattern або не завершиться timeout.
-    def wait_for(self, pattern, timeout):
+    # Читає нові рядки до появи очікуваного або сумісного pattern.
+    def wait_for_pattern(self, pattern, timeout=DEFAULT_REBOOT_TIMEOUT, alternatives=()):
+        expected_patterns = (pattern, *alternatives)
         end_time = time.time() + timeout
 
         while time.time() < end_time:
@@ -82,25 +97,47 @@ class DeviceDriver:
             line = re.sub(r"\x1b\[[0-9;]*[mK]", "", line)
             line = line.strip("\r\n")
 
-            if pattern in line:
+            if any(expected in line for expected in expected_patterns):
                 return True
 
         return False
 
-    # Перезавантажує авторизований пристрій і очікує повідомлення про готовність.
+    # Зберігає сумісність із попереднім публічним API драйвера.
+    def wait_for(self, pattern, timeout):
+        return self.wait_for_pattern(pattern, timeout)
+
+    # Перезавантажує авторизований пристрій без sleep і очікує старт застосунку.
     def reboot(self, timeout=DEFAULT_REBOOT_TIMEOUT):
-        response = self.send_command("reboot")
+        self.transport.send_line("reboot")
+        return self.wait_for_pattern(
+            "App started",
+            timeout,
+            alternatives=(CURRENT_FIRMWARE_READY_PATTERN,),
+        )
 
-        # Без активної сесії reboot заборонено, тому підготовка може перейти до register.
-        if any("Access denied" in line for line in response):
-            return False
+    # Перевіряє доступність CLI та ключових базових команд через help.
+    def is_cli_responsive(self):
+        response = self.send_command("help")
+        output = "\n".join(response)
+        required_markers = ("=== Commands ====", "status", "reboot")
 
-        # Швидке завантаження може завершитися ще під час send_command().
-        if any("Device ready" in line for line in response):
-            return True
+        return "Access denied" not in output and all(
+            marker in output for marker in required_markers
+        )
 
-        # Якщо завантаження ще триває, дочитуємо serial до повідомлення Device ready.
-        return self.wait_for("Device ready", timeout)
+    # Перевіряє завершеність status та наявність доступної heap-пам'яті.
+    def is_system_status_healthy(self):
+        response = self.send_command("status")
+        output = "\n".join(response)
+        heap_match = re.search(r"\[Status\] Free heap:\s+(\d+) bytes", output)
+
+        return (
+            "Access denied" not in output
+            and "[Status] Checking components" in output
+            and "[Status] Done." in output
+            and heap_match is not None
+            and int(heap_match.group(1)) > 0
+        )
 
     # Створює профіль і визначає успіх за маркером у відповіді прошивки.
     def register(self, login, password):
