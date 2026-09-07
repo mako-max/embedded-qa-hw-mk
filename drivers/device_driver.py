@@ -13,6 +13,7 @@ if __package__:
     from .transports.base import Transport
     from .transports.uart import (
         DEFAULT_BAUDRATE,
+        DEFAULT_DEVICE_VID,
         SERIAL_BYTESIZE,
         SERIAL_PARITY,
         SERIAL_STOPBITS,
@@ -25,6 +26,7 @@ else:
     from transports.base import Transport
     from transports.uart import (
         DEFAULT_BAUDRATE,
+        DEFAULT_DEVICE_VID,
         SERIAL_BYTESIZE,
         SERIAL_PARITY,
         SERIAL_STOPBITS,
@@ -612,10 +614,29 @@ def read_raw_response(transport: Transport, timeout):
     return bytes(response)
 
 
-# Описує параметри CLI з можливістю змінити port, baudrate і timeout.
+def parse_device_vid(value):
+    text = value.strip()
+    try:
+        vid = int(text, 16 if text.lower().startswith("0x") else 10)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(
+            "VID must be decimal or hexadecimal with a 0x prefix"
+        ) from error
+    if not 0 <= vid <= 0xFFFF:
+        raise argparse.ArgumentTypeError("VID must be between 0x0000 and 0xFFFF")
+    return vid
+
+
+# Описує параметри CLI з можливістю змінити port, VID, baudrate і timeout.
 def build_parser():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--port", help="serial port; detected automatically if omitted")
+    parser.add_argument("--port", help="explicit serial port; overrides VID autodetection")
+    parser.add_argument(
+        "--vid",
+        type=parse_device_vid,
+        default=DEFAULT_DEVICE_VID,
+        help="USB VID: decimal or 0x-prefixed hex (default: 0x1A86)",
+    )
     parser.add_argument(
         "--baudrate",
         type=int,
@@ -638,7 +659,7 @@ def run(args):
 
     port = args.port
     if port is None:
-        port = find_device_port(ports)
+        port = find_device_port(ports, device_vid=args.vid)
 
     print(f"Selected port: {port}")
     print(

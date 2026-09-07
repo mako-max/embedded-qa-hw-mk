@@ -19,9 +19,13 @@ PERSISTED_ALARM_THRESHOLD = 50
 # `distance 10s` повертає 10 показань. PRD не задає окремий stability tolerance,
 # тому для нерухомої мішені приймаємо консервативний максимальний розкид 2 см.
 DISTANCE_READING_COUNT = 10
+DISTANCE_SERIES_COUNT = 3
 MIN_DISTANCE_CM = 1.0
 MAX_DISTANCE_CM = 400.0
 MAX_DISTANCE_SPREAD_CM = 2.0
+# Окремий допуск повторюваності середніх між запусками; це тестове припущення,
+# а не перевірка абсолютної точності щодо фізично встановлених 15 см.
+MAX_DISTANCE_MEAN_SPREAD_CM = 2.0
 
 # Alarm task перевіряє умови раз на секунду. Observation windows довші за один
 # цикл потрібні для негативних перевірок, але коротші за calibration job (~4 с).
